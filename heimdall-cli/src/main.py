@@ -1,0 +1,149 @@
+import os
+import sys
+import json
+import time
+import requests
+import argparse
+from pathlib import Path
+
+# Constants
+CONFIG_DIR = os.path.expanduser("~/.config/heimdall")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+DISCORD_API_BASE = "https://discord.com/api/v10"
+
+def load_or_create_config():
+    """Loads config or creates a template if not exists."""
+    if not os.path.exists(CONFIG_DIR):
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+    
+    if not os.path.exists(CONFIG_FILE):
+        template = {
+            "discord_token": "YOUR_BOT_TOKEN_HERE",
+            "channel_id": "YOUR_CHANNEL_ID_HERE"
+        }
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(template, f, indent=4)
+        print(f"Error: Configuration file not found. Created template at {CONFIG_FILE}.")
+        print("Please edit the file with your Discord Bot Token and Channel ID.")
+        sys.exit(1)
+    
+    with open(CONFIG_FILE, "r") as f:
+        config = json.load(f)
+    
+    if config.get("discord_token") == "YOUR_BOT_TOKEN_HERE":
+        print(f"Error: Please update {CONFIG_FILE} with valid credentials.")
+        sys.exit(1)
+        
+    return config
+
+def get_headers(token):
+    return {
+        "Authorization": f"Bot {token}",
+        "Content-Type": "application/json"
+    }
+
+def send_notification(config, project_name, question):
+    """Sends an embed to Discord and returns the message ID."""
+    url = f"{DISCORD_API_BASE}/channels/{config['channel_id']}/messages"
+    
+    embed = {
+        "title": f"🚨 Action Required: {project_name}",
+        "description": question,
+        "color": 15158332, # Orange/Red
+        "footer": {
+            "text": "Reply to this message to confirm."
+        }
+    }
+    
+    payload = {
+        "embeds": [embed]
+    }
+    
+    try:
+        response = requests.post(url, headers=get_headers(config['discord_token']), json=payload)
+        response.raise_for_status()
+        return response.json()['id']
+    except requests.exceptions.RequestException as e:
+        print(f"Error sending notification: {e}")
+        sys.exit(1)
+
+def react_to_message(config, message_id, emoji="%E2%9C%85"):
+    """Reacts to a message to acknowledge receipt."""
+    url = f"{DISCORD_API_BASE}/channels/{config['channel_id']}/messages/{message_id}/reactions/{emoji}/@me"
+    try:
+        requests.put(url, headers=get_headers(config['discord_token']))
+    except:
+        pass # Non-critical
+
+def wait_for_reply(config, prompt_message_id):
+    """Polls for a reply to the prompt message."""
+    url = f"{DISCORD_API_BASE}/channels/{config['channel_id']}/messages"
+    last_message_id = prompt_message_id
+    
+    print(f"Waiting for user reply on Discord channel {config['channel_id']}...")
+    
+    while True:
+        try:
+            # Poll for messages after the prompt
+            params = {"after": prompt_message_id}
+            response = requests.get(url, headers=get_headers(config['discord_token']), params=params)
+            
+            if response.status_code == 200:
+                messages = response.json()
+                for msg in messages:
+                    # Check if it's a reply to our prompt (referenced_message)
+                    # OR if it's just the next message in the channel (simplification for single-threaded usage)
+                    # Strict check: is it a reply to prompt_message_id?
+                    is_reply = False
+                    if "referenced_message" in msg and msg["referenced_message"] is not None:
+                        if msg["referenced_message"]["id"] == prompt_message_id:
+                            is_reply = True
+                    
+                    # Looser check: If not a reply, but sent after, we might accept it 
+                    # but let's stick to strict reply or just 'next message from human' if strictly blocking.
+                    # The prompt says: "Polling Discord API để tìm tin nhắn mới sau message_id kia."
+                    # So any message after is a candidate. ideally check if not bot.
+                    
+                    if not msg.get("author", {}).get("bot", False):
+                         # Found a human message
+                        reply_content = msg.get("content", "").strip()
+                        reply_id = msg.get("id")
+                        
+                        # Acknowledge
+                        react_to_message(config, reply_id)
+                        
+                        return reply_content
+
+            elif response.status_code == 429:
+                # Rate limited
+                retry_after = response.json().get("retry_after", 3)
+                time.sleep(retry_after)
+                continue
+                
+        except requests.exceptions.RequestException as e:
+            # Network error, keep trying
+            print(f"Network error: {e}. Retrying...", file=sys.stderr)
+            time.sleep(5)
+            continue
+            
+        time.sleep(3)
+
+def main():
+    parser = argparse.ArgumentParser(description="Heimdall - Human-in-the-Loop Blocking Gateway")
+    parser.add_argument("question", help="The question/ask for the user")
+    args = parser.parse_args()
+    
+    config = load_or_create_config()
+    project_name = os.path.basename(os.getcwd())
+    
+    # Send
+    message_id = send_notification(config, project_name, args.question)
+    
+    # Wait
+    reply = wait_for_reply(config, message_id)
+    
+    # Output
+    print(f"USER_CONFIRMED: {reply}")
+
+if __name__ == "__main__":
+    main()
