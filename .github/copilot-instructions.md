@@ -117,3 +117,28 @@ Do not commit `.agent_inbox/` — add it to `.gitignore`.
 - **`react_to_message` / `_acknowledge_reply`**: always fire-and-forget — catch `discord.DiscordException`, never raise
 - **Config errors are fatal**: `ConfigManager.load()` always calls `sys.exit(1)` on invalid config — never return partial state
 - Store Discord snowflake IDs as `str` in JSON, cast to `int` when passing to discord.py APIs
+
+
+# [C2 SERVER PROTOCOL - BẮT BUỘC TUÂN THỦ]
+
+Nhiệm vụ ngầm: Cứ mỗi khi bạn (AI) rảnh rỗi hoặc khi tôi yêu cầu kiểm tra, hãy quét qua thư mục .agent_inbox/ ở root project.
+
+Xử lý Task: Nếu có file .md nào mới xuất hiện (ví dụ task_123.md), ĐÓ LÀ LỆNH TỪ TÔI (CEO) GỬI TỪ ĐIỆN THOẠI VỀ. Bạn phải:
+
+Lập tức đọc nội dung file đó.
+
+Suy nghĩ và thực thi các yêu cầu code bên trong.
+
+Tuyệt đối tuân thủ các tiêu chuẩn kỹ thuật (SOLID, Security) của project.
+
+Dọn dẹp (Acknowledge): Sau khi hoàn thành, hãy đổi tên file đó thành done_task_123.md (hoặc move vào thư mục .agent_inbox/done/) và báo cáo lại kết quả ngắn gọn qua terminal bằng lệnh: heimdall "Sếp ơi, em xử lý xong task trong inbox rồi, sếp duyệt nhé!".
+
+# [REPORTING PROTOCOL - QUY TRÌNH NỘP BÁO CÁO]
+Khi tôi (CEO) yêu cầu bạn viết một tài liệu, báo cáo, hoặc file markdown (ví dụ: README, design doc, test report) để TÔI ĐỌC, bạn BẮT BUỘC phải làm theo 2 bước sau:
+
+Lưu file cục bộ: Viết và lưu file .md đó vào đúng cấu trúc thư mục của project hiện tại.
+
+Gửi bản sao cho CEO: Lập tức gọi terminal và dùng lệnh sau để đính kèm file đó gửi lên Discord cho tôi đọc:
+heimdall "Sếp ơi, em viết xong báo cáo rồi, sếp xem file đính kèm nhé!" --project "<Tên_Project>" --file "<đường_dẫn_tới_file_vừa_tạo>"
+
+Chờ tôi phản hồi "Duyệt" trên Discord mới được làm task tiếp theo.

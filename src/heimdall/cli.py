@@ -59,8 +59,26 @@ logger = logging.getLogger("heimdall")
 # ---------------------------------------------------------------------------
 
 
-def _run_ask(question: str, project_name: str, timeout: float) -> None:
+def _run_ask(
+    question: str, project_name: str, timeout: float, file_path: Optional[str] = None
+) -> None:
     """Block until the user confirms via Discord, then print result to stdout."""
+    # Validate file early — fail fast before any Discord connection.
+    resolved_file: Optional[Path] = None
+    if file_path is not None:
+        resolved_file = Path(file_path).resolve()
+        if not resolved_file.is_file():
+            logger.error("File not found: %s", resolved_file)
+            sys.exit(1)
+        size_mb = resolved_file.stat().st_size / (1024 * 1024)
+        if size_mb > 25:
+            logger.error(
+                "File too large (%.1f MB). Discord limits attachments to 25 MB.",
+                size_mb,
+            )
+            sys.exit(1)
+        logger.info("Will attach file: %s (%.2f MB)", resolved_file.name, size_mb)
+
     try:
         config_manager = ConfigManager()
         config = config_manager.load()
@@ -75,6 +93,7 @@ def _run_ask(question: str, project_name: str, timeout: float) -> None:
             question=question,
             existing_thread_id=existing_thread_id,
             timeout=timeout,
+            file_path=str(resolved_file) if resolved_file else None,
         )
 
         # Blocks until the bot receives a reply or times out.
@@ -172,6 +191,12 @@ def main() -> None:
         metavar="SECONDS",
         help="Seconds to wait for a reply before aborting (default: 3600)",
     )
+    ask_parser.add_argument(
+        "--file",
+        default=None,
+        metavar="PATH",
+        help="Path to a file to attach to the Discord message",
+    )
 
     # -- daemon subcommand --
     daemon_parser = subparsers.add_parser(
@@ -203,7 +228,7 @@ def main() -> None:
         if not hasattr(args, "question"):
             parser.print_help()
             sys.exit(1)
-        _run_ask(args.question, project_name, args.timeout)
+        _run_ask(args.question, project_name, args.timeout, getattr(args, "file", None))
 
 
 if __name__ == "__main__":

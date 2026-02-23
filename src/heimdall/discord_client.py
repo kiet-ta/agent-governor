@@ -45,6 +45,7 @@ class HeimdallBot(discord.Client):
         question: str,
         existing_thread_id: Optional[int] = None,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        file_path: Optional[str] = None,
     ) -> None:
         # MESSAGE_CONTENT is a privileged intent required to read message text.
         # Must be enabled in the Discord Developer Portal under Bot → Privileged Intents.
@@ -57,6 +58,7 @@ class HeimdallBot(discord.Client):
         self._question = question
         self._existing_thread_id = existing_thread_id
         self._timeout = timeout
+        self._file_path = file_path
 
         # Public output — populated after run, read by the CLI caller
         self.reply_content: Optional[str] = None
@@ -201,15 +203,65 @@ class HeimdallBot(discord.Client):
     # ------------------------------------------------------------------
 
     async def _send_embed(self, thread: discord.Thread) -> None:
-        """Post the confirmation request embed to the given thread."""
+        """Post the confirmation request embed to the given thread.
+
+        If a file_path was provided and the file exists on disk, it is attached
+        to the message via ``discord.File``.  Attachment failures are logged but
+        do **not** prevent the embed from being sent.
+        """
         embed = discord.Embed(
             title=f"🚨 Action Required: {self._project_name}",
             description=self._question,
             color=discord.Color.orange(),
         )
         embed.set_footer(text="Reply in this thread to confirm or reject.")
-        await thread.send(embed=embed)
-        logger.info("Question posted to thread '%s'.", thread.name)
+
+        attachment = self._prepare_attachment()
+        if attachment is not None:
+            await thread.send(embed=embed, file=attachment)
+            logger.info(
+                "Question posted to thread '%s' with attachment '%s'.",
+                thread.name,
+                self._file_path,
+            )
+        else:
+            await thread.send(embed=embed)
+            logger.info("Question posted to thread '%s'.", thread.name)
+
+    # ------------------------------------------------------------------
+    # File-attachment helper
+    # ------------------------------------------------------------------
+
+    def _prepare_attachment(self) -> Optional[discord.File]:
+        """Return a ``discord.File`` for *self._file_path*, or ``None``.
+
+        Validates existence and 25 MB Discord size limit.  Errors are logged
+        as warnings so the embed can still be sent without the attachment.
+        """
+        if self._file_path is None:
+            return None
+
+        from pathlib import Path
+
+        path = Path(self._file_path)
+        if not path.is_file():
+            logger.warning("Attachment skipped — file not found: %s", path)
+            return None
+
+        size_mb = path.stat().st_size / (1024 * 1024)
+        if size_mb > 25:
+            logger.warning(
+                "Attachment skipped — file too large (%.1f MB, limit 25 MB): %s",
+                size_mb,
+                path,
+            )
+            return None
+
+        try:
+            return discord.File(str(path), filename=path.name)
+        except Exception:
+            logger.exception("Failed to prepare attachment from '%s'.", path)
+            return None
 
     async def _acknowledge_reply(self, message: discord.Message) -> None:
         """React to the reply with ✅ to signal receipt.
