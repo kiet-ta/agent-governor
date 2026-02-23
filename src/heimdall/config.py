@@ -75,6 +75,18 @@ class ConfigManager:
             )
             sys.exit(1)
 
+        # Validate channel_id is a numeric Discord snowflake
+        channel_id = data.get("channel_id", "")
+        if not channel_id or not str(channel_id).isdigit():
+            logger.error(
+                "Invalid 'channel_id' in %s. Expected a numeric Discord snowflake ID, "
+                "got: '%s'. Right-click a text channel in Discord (Developer Mode) → "
+                "Copy Channel ID.",
+                self._config_file,
+                channel_id,
+            )
+            sys.exit(1)
+
         # Ensure the project_threads key exists for backwards compatibility
         data.setdefault("project_threads", {})
         self._data = data

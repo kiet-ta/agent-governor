@@ -76,6 +76,9 @@ class HeimdallBot(discord.Client):
         )
         try:
             await self._run_flow()
+        except ValueError as e:
+            # Known configuration / permission errors — log clearly, no traceback.
+            logger.error("%s", e)
         except Exception:
             logger.exception("Unhandled error during bot flow.")
         finally:
@@ -157,9 +160,23 @@ class HeimdallBot(discord.Client):
         Uses a starter message attached to the thread, which avoids requiring
         the CREATE_PUBLIC_THREADS (no-message) permission on non-Community servers.
         """
-        parent = self.get_channel(self._channel_id) or await self.fetch_channel(
-            self._channel_id
-        )
+        try:
+            parent = self.get_channel(self._channel_id) or await self.fetch_channel(
+                self._channel_id
+            )
+        except discord.NotFound:
+            raise ValueError(
+                f"Channel ID {self._channel_id} not found (404). "
+                "Please verify 'channel_id' in ~/.config/heimdall/config.json. "
+                "Ensure the ID is a valid text channel and the bot has been "
+                "invited to that server."
+            )
+        except discord.Forbidden:
+            raise ValueError(
+                f"Bot lacks permission to access channel {self._channel_id}. "
+                "Ensure the bot has 'Read Messages/View Channels' permission "
+                "for this channel."
+            )
 
         if not isinstance(parent, discord.TextChannel):
             raise ValueError(

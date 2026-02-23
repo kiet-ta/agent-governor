@@ -13,7 +13,26 @@ import logging
 import os
 import sys
 import argparse
+import warnings
 from typing import Optional
+
+
+class _UnclosedFilter(logging.Filter):
+    """Drop aiohttp 'Unclosed connector' noise from asyncio's exception handler."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage() if record.args else str(record.msg)
+        return "Unclosed connector" not in msg
+
+
+# Suppress the known aiohttp shutdown noise that fires via two paths:
+#   1. warnings.warn("Unclosed connector …", ResourceWarning)
+#   2. loop.call_exception_handler({"message": "Unclosed connector"})
+warnings.filterwarnings("ignore", message="Unclosed.*", category=ResourceWarning)
+logging.getLogger("asyncio").addFilter(_UnclosedFilter())
+
+# PyNaCl voice warning is irrelevant — Heimdall never uses Discord voice.
+logging.getLogger("discord.client").setLevel(logging.ERROR)
 
 from heimdall.config import ConfigManager
 from heimdall.discord_client import HeimdallBot
