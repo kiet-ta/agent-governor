@@ -2,21 +2,29 @@
 
 Heimdall is a "Human-in-the-Loop" middleware tool that blocks execution until a user confirms an action via Discord. It acts as a safety gate for autonomous agents.
 
+It operates in two modes:
+- **Ask** — One-shot blocking confirmation. Blocks a script until you reply on Discord.
+- **Daemon** — Persistent C2 server. Listens 24/7 for `!prompt` commands and drops task files into `.agent_inbox/` for your IDE agent.
+
 ## Architecture
 
-Instead of polling the Discord REST API, Heimdall connects to the **Discord Gateway via WebSocket** (using `discord.py`). This eliminates polling delays and HTTP 429 rate-limit errors.
+Heimdall connects to the **Discord Gateway via WebSocket** (using `discord.py`) — no polling.
 
-Each project gets its own **Discord Thread** for clean, multi-project routing:
+Each project gets its own **Discord Thread** for clean multi-project routing:
 
 ```
-CLI call (heimdall "Deploy?")
+# Ask mode
+heimdall "Deploy?"
   → ConfigManager loads config + looks up project's thread_id
-  → HeimdallBot connects to Discord Gateway (WebSocket)
-  → Resolves or creates a Thread for the project
-  → Posts an embed to the Thread
-  → wait_for("message") listens for the first human reply (event-driven)
+  → HeimdallBot connects (WebSocket), posts embed, wait_for(reply)
   → Prints "USER_CONFIRMED: <reply>" to stdout, disconnects
-  → ConfigManager saves the new thread_id if first run for this project
+
+# Daemon mode
+heimdall daemon
+  → HeimdallDaemon connects (WebSocket), stays online forever
+  → on_message: filters !prompt commands in the project thread
+  → InboxWriter writes .agent_inbox/task_<timestamp>.md
+  → Bot reacts 👀 → writes file → reacts ✅
 ```
 
 ## Installation
@@ -54,27 +62,48 @@ Run `heimdall "Init"` once to auto-generate the template, then fill in your cred
 
 ## Usage
 
+### Mode 1: Ask (One-shot Blocking Confirmation)
+
 ```bash
-# Basic usage (project name = current directory name)
+# Shorthand — project name = current directory
 heimdall "Should I deploy to production?"
 
-# Explicit project name (useful in CI or scripts)
-heimdall --project my-api "Migrate the production database?"
+# Explicit subcommand
+heimdall ask "Should I deploy to production?"
 
-# Custom timeout in seconds (default: 3600 / 1 hour)
-heimdall --timeout 300 "Quick approval needed?"
+# Custom project name and timeout
+heimdall ask --project my-api --timeout 300 "Migrate the production database?"
 ```
 
-### Output on success:
+**Output on success:**
 ```
 USER_CONFIRMED: Yes, go ahead.
 ```
+
+### Mode 2: Daemon (Persistent C2 Server)
+
+```bash
+# Start daemon in your project directory
+cd /path/to/your/project
+heimdall daemon
+
+# With explicit project name
+heimdall daemon --project my-api
+```
+
+From Discord, type in the project thread:
+```
+!prompt write a README for this project
+!prompt add unit tests for the auth module
+```
+
+Task files appear in `.agent_inbox/task_<timestamp>.md`. Add `.agent_inbox/` to `.gitignore`.
 
 ### In a Bash Script
 
 ```bash
 #!/bin/bash
-RESPONSE=$(heimdall --project my-app "Build complete. Deploy to production?")
+RESPONSE=$(heimdall ask --project my-app "Build complete. Deploy to production?")
 
 if [[ "$RESPONSE" == *"Yes"* ]] || [[ "$RESPONSE" == *"yes"* ]]; then
     echo "Deploying..."
@@ -90,7 +119,7 @@ fi
 import subprocess
 
 result = subprocess.check_output(
-    ["heimdall", "--project", "my-app", "Delete old backups?"], text=True
+    ["heimdall", "ask", "--project", "my-app", "Delete old backups?"], text=True
 )
 answer = result.strip().replace("USER_CONFIRMED: ", "")
 ```

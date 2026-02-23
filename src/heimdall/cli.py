@@ -1,11 +1,18 @@
 """
 Heimdall CLI — entry point and orchestrator.
 
-Single Responsibility: argument parsing, wiring ConfigManager + HeimdallBot,
-and writing the final result to stdout. No Discord or file I/O logic lives here.
+Single Responsibility: argument parsing and subcommand routing only.
+No Discord or file I/O logic lives here.
 
-Stdout contract: callers capture and parse "USER_CONFIRMED: <reply>".
-All diagnostic output (logs) is written to stderr.
+Subcommands:
+    heimdall ask "question"   — One-shot blocking confirmation (Human-in-the-Loop).
+    heimdall daemon           — Persistent C2 daemon that handles !prompt commands.
+
+Legacy positional shorthand (backwards compatible):
+    heimdall "question"       — Equivalent to `heimdall ask "question"`.
+
+Stdout contract (ask mode): callers capture and parse "USER_CONFIRMED: <reply>".
+All diagnostic output goes to stderr via logger.
 """
 
 import asyncio
@@ -14,6 +21,7 @@ import os
 import sys
 import argparse
 import warnings
+from pathlib import Path
 from typing import Optional
 
 
@@ -35,6 +43,7 @@ logging.getLogger("asyncio").addFilter(_UnclosedFilter())
 logging.getLogger("discord.client").setLevel(logging.ERROR)
 
 from heimdall.config import ConfigManager
+from heimdall.daemon import HeimdallDaemon
 from heimdall.discord_client import HeimdallBot
 
 logging.basicConfig(
@@ -45,28 +54,13 @@ logging.basicConfig(
 logger = logging.getLogger("heimdall")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Heimdall — Human-in-the-Loop Blocking Gateway"
-    )
-    parser.add_argument("question", help="The question or action to confirm via Discord")
-    parser.add_argument(
-        "--project",
-        default=None,
-        metavar="NAME",
-        help="Project name used for thread routing (defaults to current directory name)",
-    )
-    parser.add_argument(
-        "--timeout",
-        type=float,
-        default=3600.0,
-        metavar="SECONDS",
-        help="Seconds to wait for a reply before aborting (default: 3600)",
-    )
-    args = parser.parse_args()
+# ---------------------------------------------------------------------------
+# Subcommand: ask (one-shot blocking confirmation)
+# ---------------------------------------------------------------------------
 
-    project_name: str = args.project or os.path.basename(os.getcwd())
 
+def _run_ask(question: str, project_name: str, timeout: float) -> None:
+    """Block until the user confirms via Discord, then print result to stdout."""
     try:
         config_manager = ConfigManager()
         config = config_manager.load()
@@ -78,13 +72,12 @@ def main() -> None:
         bot = HeimdallBot(
             channel_id=channel_id,
             project_name=project_name,
-            question=args.question,
+            question=question,
             existing_thread_id=existing_thread_id,
-            timeout=args.timeout,
+            timeout=timeout,
         )
 
         # Blocks until the bot receives a reply or times out.
-        # discord.py manages the asyncio event loop internally via bot.start().
         asyncio.run(bot.start(token))
 
         # Persist a newly created thread so future calls for this project reuse it.
@@ -104,6 +97,113 @@ def main() -> None:
     except Exception as e:
         logger.exception("Fatal error: %s", e)
         sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: daemon (persistent C2 server)
+# ---------------------------------------------------------------------------
+
+
+def _run_daemon(project_name: str) -> None:
+    """Start the persistent HeimdallDaemon — blocks indefinitely until Ctrl-C."""
+    project_root = Path(os.getcwd())
+
+    try:
+        config_manager = ConfigManager()
+        config = config_manager.load()
+
+        token: str = config["discord_token"]
+        channel_id: int = int(config["channel_id"])
+
+        daemon = HeimdallDaemon(
+            config_manager=config_manager,
+            project_name=project_name,
+            project_root=project_root,
+            channel_id=channel_id,
+        )
+
+        logger.info(
+            "Starting Heimdall Daemon for project '%s' (root: %s). "
+            "Press Ctrl-C to stop.",
+            project_name,
+            project_root,
+        )
+        # asyncio.run() blocks indefinitely — discord.py reconnects on network drops.
+        asyncio.run(daemon.start(token))
+
+    except KeyboardInterrupt:
+        logger.info("Daemon stopped by user (SIGINT).")
+        sys.exit(0)
+    except Exception as e:
+        logger.exception("Daemon fatal error: %s", e)
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Heimdall — Human-in-the-Loop Blocking Gateway",
+        # Preserve legacy `heimdall "question"` shorthand by not requiring a subcommand.
+        # We detect the subcommand by checking if the first arg is "ask" or "daemon".
+    )
+
+    subparsers = parser.add_subparsers(dest="subcommand")
+
+    # -- ask subcommand --
+    ask_parser = subparsers.add_parser(
+        "ask",
+        help="Block execution until a human confirms via Discord (default mode)",
+    )
+    ask_parser.add_argument("question", help="The question or action to confirm")
+    ask_parser.add_argument(
+        "--project",
+        default=None,
+        metavar="NAME",
+        help="Project name for thread routing (defaults to current directory name)",
+    )
+    ask_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=3600.0,
+        metavar="SECONDS",
+        help="Seconds to wait for a reply before aborting (default: 3600)",
+    )
+
+    # -- daemon subcommand --
+    daemon_parser = subparsers.add_parser(
+        "daemon",
+        help="Run persistent Discord C2 daemon — listens for !prompt commands",
+    )
+    daemon_parser.add_argument(
+        "--project",
+        default=None,
+        metavar="NAME",
+        help="Project name for thread routing (defaults to current directory name)",
+    )
+
+    # Legacy shorthand: heimdall "question" → treated as `heimdall ask "question"`
+    # Detect this case by checking if the first arg is not a known subcommand.
+    if len(sys.argv) >= 2 and sys.argv[1] not in ("ask", "daemon", "-h", "--help"):
+        # Inject "ask" so argparse routes correctly
+        sys.argv.insert(1, "ask")
+
+    args = parser.parse_args()
+    project_name: str = (
+        getattr(args, "project", None) or os.path.basename(os.getcwd())
+    )
+
+    if args.subcommand == "daemon":
+        _run_daemon(project_name)
+    else:
+        # Default: ask subcommand
+        if not hasattr(args, "question"):
+            parser.print_help()
+            sys.exit(1)
+        _run_ask(args.question, project_name, args.timeout)
 
 
 if __name__ == "__main__":

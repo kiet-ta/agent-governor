@@ -43,6 +43,9 @@ htmlcov/
 ~/.config/heimdall/config.json
 .config/heimdall/config.json
 
+# Heimdall daemon inbox (task drop-folder — never commit task files)
+.agent_inbox/
+
 # Temporary files
 *.log
 .tmp/
