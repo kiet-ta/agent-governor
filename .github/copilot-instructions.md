@@ -29,9 +29,10 @@ Installed command (`pyproject.toml`): `heimdall = "heimdall.cli:main"`. Always u
 
 ### Ask mode (one-shot)
 ```
-CLI arg → ConfigManager.load() → get_thread_id(project)
+CLI arg + optional --file → ConfigManager.load() → get_thread_id(project)
+  → validate file (exists, <25MB) in cli.py → fail-fast if invalid
   → HeimdallBot.start(token)          ← asyncio.run() blocks here
-      → on_ready() → _resolve_thread() → _send_embed() → wait_for("message")
+      → on_ready() → _resolve_thread() → _send_embed(+ discord.File if file_path) → wait_for("message")
       → reply received → _acknowledge_reply() → close()
   → asyncio.run() returns
   → save_thread_id() if new thread
@@ -39,6 +40,7 @@ CLI arg → ConfigManager.load() → get_thread_id(project)
 ```
 
 **Stdout contract**: callers parse the `USER_CONFIRMED: <reply>` prefix. All logs go to **stderr** via `logger`.
+**File attachment**: `--file <path>` attaches the file via `discord.File`. Validated early in CLI (25MB limit), gracefully degrades in `_send_embed` if file becomes unavailable.
 
 ### Daemon mode (persistent C2)
 ```
@@ -95,6 +97,8 @@ heimdall "test question"                      # legacy shorthand — injects 'as
 heimdall ask "Deploy to prod?"                # explicit form
 heimdall ask --project my-api "Deploy?"       # explicit project name
 heimdall ask --timeout 120 "Quick check?"     # custom timeout
+heimdall ask "Review this report?" --file ./reports/deploy-checklist.md  # attach file
+heimdall ask --project my-api --file /tmp/report.md "Check this file?"   # with project
 
 # Daemon mode (persistent C2 server)
 heimdall daemon                               # listens in current dir's project thread
